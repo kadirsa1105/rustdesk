@@ -1,0 +1,69 @@
+name: Build DHB RustDesk (Windows)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ dhb-custom ]
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Patch hbb_common config.rs (DHB defaults)
+        shell: pwsh
+        run: |
+          $cfgA = 'libs/hbb_common/src/config.rs'
+          $cfgB = 'hbb_common/src/config.rs'
+          $cfg  = if (Test-Path $cfgA) { $cfgA } elseif (Test-Path $cfgB) { $cfgB } else { throw "config.rs bulunamadı" }
+          $raw  = Get-Content $cfg -Raw
+          $raw  = $raw `
+            -replace 'pub\s+const\s+RENDEZVOUS_SERVERS:[^;]+;', 'pub const RENDEZVOUS_SERVERS: &[&str] = &["rustdesk.dhb.tr:21116","rustdesk.dhb.tr"];' `
+            -replace 'pub\s+const\s+RS_PUB_KEY:[^;]+;', 'pub const RS_PUB_KEY: &str = "FGRByd0nVcWDpmjKvranKmEHxzpxa+fSdqUigMnJfW0=";'
+          Set-Content -Encoding UTF8 $cfg $raw
+          Write-Host "[+] Patched: $cfg"
+
+      - name: Setup Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          target: x86_64-pc-windows-msvc
+          override: true
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build (release)
+        shell: pwsh
+        run: python .\build.py --release
+
+      - name: Collect artifacts
+        shell: pwsh
+        run: |
+          mkdir dist
+          copy target\release\rustdesk.exe dist\DHB-RustDesk.exe
+          # sciter.dll gerekirse tipik konumlardan kopyala
+          $candidates = @("res\windows\sciter.dll","resources\windows\sciter.dll","sciter.dll")
+          foreach ($p in $candidates) { if (Test-Path $p) { copy $p dist\sciter.dll; break } }
+          Compress-Archive -Path dist\* -DestinationPath dist\DHB-RustDesk-win64.zip -Force
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DHB-RustDesk-win64
+          path: dist/DHB-RustDesk-win64.zip
